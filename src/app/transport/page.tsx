@@ -16,14 +16,14 @@ export default function TransportPage() {
   const priceThresholds = useMemo(
     () =>
       computePercentileThresholds(
-        SAMPLE_ROUTES.map((r) => r.price).filter((p): p is number => p != null)
+        SAMPLE_ROUTES.map((r) => r.price).filter((p): p is number => p !== undefined)
       ),
     []
   );
 
   const colorForRoute = useMemo(
     () => (route: (typeof SAMPLE_ROUTES)[number]) =>
-      route.price != null && priceThresholds ? getValueColor(route.price, priceThresholds) : '#9ca3af',
+      route.price !== undefined && priceThresholds ? getValueColor(route.price, priceThresholds) : '#9ca3af',
     [priceThresholds]
   );
 

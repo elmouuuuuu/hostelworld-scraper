@@ -74,7 +74,7 @@ export function ConnectionPanel({ city, routes, priceThresholds, onClose, onSele
           <ul className="divide-y divide-gray-50">
             {connections.map(({ route, destination }) => {
               if (!destination) return null;
-              const color = route.price != null && priceThresholds ? getValueColor(route.price, priceThresholds) : '#9ca3af';
+              const color = route.price !== undefined && priceThresholds ? getValueColor(route.price, priceThresholds) : '#9ca3af';
               const duration = route.durationMinutes
                 ? `${Math.floor(route.durationMinutes / 60)}h ${route.durationMinutes % 60}m`
                 : 'unknown';
@@ -94,7 +94,7 @@ export function ConnectionPanel({ city, routes, priceThresholds, onClose, onSele
                     <div className="flex items-center gap-1.5">
                       <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
                       <span className="text-sm font-medium text-gray-900">
-                        {route.price != null ? `CA$${route.price}` : 'N/A'}
+                        {route.price !== undefined ? `CA$${route.price}` : 'N/A'}
                       </span>
                     </div>
                   </button>
