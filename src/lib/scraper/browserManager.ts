@@ -209,6 +209,33 @@ export async function getAutocompletePage(): Promise<Page> {
   return getSharedAutocompletePage();
 }
 
+let sharedBrowserQueueTail: Promise<void> = Promise.resolve();
+
+/**
+ * Serializes access to the shared browser — ensures only ONE caller is
+ * actively using it (creating a context, navigating, closing it) at
+ * any given moment, queueing others to run strictly after.
+ *
+ * Necessary because @sparticuz/chromium launches with --single-process
+ * (a real, documented resource-saving flag for serverless environments
+ * running the whole browser as one OS process instead of separate
+ * ones). Confirmed via production logs (Sept 2026): failures cluster
+ * tightly together in time, exactly when multiple autocomplete
+ * requests overlap — consistent with concurrent contexts on that one
+ * single-process browser crashing each other. Verified this queuing
+ * pattern actually serializes concurrent calls (no overlap) via
+ * simulation before shipping — see conversation history.
+ */
+export function withSharedBrowserLock<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = sharedBrowserQueueTail;
+  const resultPromise = previous.then(fn, fn);
+  sharedBrowserQueueTail = resultPromise.then(
+    () => undefined,
+    () => undefined
+  );
+  return resultPromise;
+}
+
 export async function closeScraperSession(session: ScraperSession): Promise<void> {
   await session.context.close();
   await session.browser.close();

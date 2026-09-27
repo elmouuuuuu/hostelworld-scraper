@@ -2,7 +2,7 @@ import config from '@/config/config';
 import { createLogger } from '@/lib/utils/logger';
 import { slugify } from '@/lib/utils/slugify';
 import { getContinentSlug } from '@/lib/utils/countryMeta';
-import { openSharedPage } from './browserManager';
+import { openSharedPage, withSharedBrowserLock } from './browserManager';
 import type { CitySuggestion } from '@/types/city';
 
 const logger = createLogger('hostelworldSuggestProvider');
@@ -59,16 +59,20 @@ function toCitySuggestion(item: RawSuggestItem): CitySuggestion {
  * happens for a real visitor.
  *
  * SPEED: reuses a shared, already-launched browser process
- * (openSharedPage) instead of launching a fresh one per request, but
- * still opens a NEW, isolated context + real navigation for each call.
- * This is the version PROVEN reliable via repeated testing (~2.6-2.7s,
- * consistent) — a further optimization using one single persistent
- * page across all requests was tried and rolled back after it hung for
- * 93 seconds on one request and then silently broke, returning fast,
- * empty, wrong results for every request after that with no recovery
- * path. That's a worse failure mode than this version's honest,
- * consistent ~2.6s — not worth the risk without proper health-check
- * and retry logic, which is future work, not this fix.
+ * (openSharedPage) instead of launching a fresh one per request.
+ *
+ * RELIABILITY: the whole browser-touching section is wrapped in
+ * withSharedBrowserLock, serializing access so only one lookup ever
+ * uses the shared browser at a time. Necessary because
+ * @sparticuz/chromium launches with --single-process for serverless
+ * resource constraints — confirmed via production logs (Sept 2026)
+ * that concurrent overlapping requests (e.g. typing quickly enough to
+ * fire two lookups close together) were crashing each other on that
+ * one shared single-process browser, producing clustered failures.
+ * Combined with browserManager.ts's isConnected() health-check (a
+ * separate, earlier fix for a browser going stale between idle
+ * periods), this addresses two distinct failure modes found in real
+ * production use, not the same bug twice.
  *
  * Server-side only. Throws on any failure; the caller (the
  * /api/autocomplete route) is responsible for catching this and
@@ -85,39 +89,41 @@ export async function fetchHostelworldSuggestions(query: string): Promise<CitySu
   const { autocomplete } = config.scraper;
   const url = `${autocomplete.baseUrl}${autocomplete.path}?text=${encodeURIComponent(query)}&v=${autocomplete.variant}`;
 
-  const { context, page } = await openSharedPage();
+  return withSharedBrowserLock(async () => {
+    const { context, page } = await openSharedPage();
 
-  try {
-    await page.goto(config.scraper.baseUrl, { waitUntil: 'domcontentloaded' });
+    try {
+      await page.goto(config.scraper.baseUrl, { waitUntil: 'domcontentloaded' });
 
-    const raw = await page.evaluate(
-      async ({ url, apiKey }) => {
-        const response = await fetch(url, {
-          method: 'GET',
-          headers: {
-            accept: 'application/json',
-            'api-key': apiKey,
-          },
-          cache: 'no-store',
-        });
-        if (!response.ok) {
-          throw new Error(`Hostelworld suggest API returned HTTP ${response.status}`);
-        }
-        return response.json();
-      },
-      { url, apiKey }
-    );
+      const raw = await page.evaluate(
+        async ({ url, apiKey }) => {
+          const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+              accept: 'application/json',
+              'api-key': apiKey,
+            },
+            cache: 'no-store',
+          });
+          if (!response.ok) {
+            throw new Error(`Hostelworld suggest API returned HTTP ${response.status}`);
+          }
+          return response.json();
+        },
+        { url, apiKey }
+      );
 
-    const cities = (raw as RawSuggestItem[])
-      .filter((item): item is RawSuggestItem => item.type === 'city')
-      .map(toCitySuggestion);
+      const cities = (raw as RawSuggestItem[])
+        .filter((item): item is RawSuggestItem => item.type === 'city')
+        .map(toCitySuggestion);
 
-    logger.warn(
-      `"${query}" -> ${cities.length} city suggestion(s) (${(raw as RawSuggestItem[]).length} raw items) [browser-routed].`
-    );
+      logger.warn(
+        `"${query}" -> ${cities.length} city suggestion(s) (${(raw as RawSuggestItem[]).length} raw items) [browser-routed].`
+      );
 
-    return cities;
-  } finally {
-    await context.close();
-  }
+      return cities;
+    } finally {
+      await context.close();
+    }
+  });
 }
