@@ -112,13 +112,27 @@ let sharedBrowserPromise: Promise<Browser> | null = null;
  * change than this.
  */
 async function getSharedBrowser(): Promise<Browser> {
-  if (!sharedBrowserPromise) {
-    sharedBrowserPromise = launchBrowser().catch((error) => {
-      // Don't cache a failed launch — the next call should retry fresh.
-      sharedBrowserPromise = null;
-      throw error;
-    });
+  if (sharedBrowserPromise) {
+    const existingBrowser = await sharedBrowserPromise;
+    if (existingBrowser.isConnected()) {
+      return existingBrowser;
+    }
+    // The cached browser's underlying process died — most likely Vercel
+    // froze/recycled the serverless instance between requests, silently
+    // killing the browser while our module-level reference to it stayed
+    // around. Confirmed happening in production (Sept 2026): repeated
+    // "Target page, context or browser has been closed" errors on live
+    // autocomplete requests. Discard the stale reference and launch a
+    // genuinely fresh browser instead of trusting a dead one.
+    logger.warn('Shared browser was disconnected — launching a fresh one.');
+    sharedBrowserPromise = null;
   }
+
+  sharedBrowserPromise = launchBrowser().catch((error) => {
+    // Don't cache a failed launch — the next call should retry fresh.
+    sharedBrowserPromise = null;
+    throw error;
+  });
   return sharedBrowserPromise;
 }
 
